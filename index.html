@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>Mistral Alt-Text Generator</title>
+<style>
+  body{font-family:system-ui,Arial,sans-serif;max-width:720px;margin:2rem auto;padding:0 1rem;line-height:1.4;position:relative}
+  h1{font-size:1.8rem;margin-bottom:1rem}
+  label{display:block;margin:.6rem 0 .2rem;font-weight:600}
+  label.remember{
+    display:inline-flex;       
+    align-items:center;
+    gap:.5rem;                 
+    margin:0.7rem 0;       
+    white-space:nowrap;            
+  }
+  .topbar{
+  display:flex;                 
+  align-items:center;           
+  justify-content:space-between;
+  margin-bottom:1rem;           
+}
+
+  input,textarea,button{font:inherit;padding:.4rem .6rem;border:1px solid #bbb;border-radius:4px;width:100%;box-sizing:border-box}
+  button{cursor:pointer}
+  button.primary{background:#0069ff;color:#fff;border:none}
+  button.secondary{background:#f0f0f0;color:#000;border:none;margin-top:.2rem}
+  #log{background:#eee;color:#333;padding:1rem;font-family:monospace;height:220px;overflow-y:auto;margin-top:1rem;border-radius:4px}
+#settingsBtn{
+  background:none;
+  border:none;
+  font-size:1.4rem;
+  cursor:pointer;
+  color:#666;;
+  width:auto;      
+}
+  #settingsBtn:hover{color:#000}
+  dialog{border:none;border-radius:8px;padding:1.2rem;max-width:400px;width:95%}
+  dialog::backdrop{background:rgba(0,0,0,.3)}
+  dialog h2{margin-top:0;font-size:1.3rem}
+  dialog menu{display:flex;gap:.6rem;justify-content:flex-end;padding:0;margin-top:1rem}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <h1>Mistral Alt-Text Generator</h1>
+  <button id="settingsBtn" title="Einstellungen" aria-label="Einstellungen">
+      <svg viewBox="0 0 24 24" width="30" height="30" aria-hidden="true">
+      <path d="M19.14 12.94a7.42 7.42 0 0 0 .05-.94 7.42 7.42 0 0 0-.05-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.61-.22l-2.39.96a7.28 7.28 0 0 0-1.63-.94l-.36-2.54A.5.5 0 0 0 13.88 2h-3.76a.5.5 0 0 0-.49.41l-.36 2.54a7.28 7.28 0 0 0-1.63.94l-2.39-.96a.5.5 0 0 0-.61.22L2.72 8.47a.5.5 0 0 0 .12.64l2.03 1.58a7.42 7.42 0 0 0 0 1.88l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32c.13.22.4.31.61.22l2.39-.96a7.28 7.28 0 0 0 1.63.94l.36 2.54c.04.24.25.41.49.41h3.76c.24 0 .45-.17.49-.41l.36-2.54a7.28 7.28 0 0 0 1.63-.94l2.39.96c.22.09.49 0 .61-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58ZM12 15.5A3.5 3.5 0 1 1 12 8a3.5 3.5 0 0 1 0 7.5Z" fill="currentColor"/>
+    </svg>
+
+</button>
+</header>
+
+<label>Bilderordner
+  <button id="pickDir" type="button" class="secondary">Ordner wählen</button>
+  <span id="dirName"></span>
+</label>
+
+<label>Ausgabedatei
+  <button id="pickFile" type="button" class="secondary">Datei wählen / anlegen</button>
+  <span id="fileName"></span>
+</label>
+
+<label>Prompt
+  <textarea id="prompt" rows="6">Bitte beschreibe das folgende Bild klar, knapp (100–250 Zeichen)…</textarea>
+</label>
+
+<button id="run" type="button" class="primary">Start</button>
+
+<pre id="log" aria-live="polite"></pre>
+
+<!-- ===================== SETTINGS MODAL ===================== -->
+<dialog id="settingsDialog">
+  <form method="dialog">
+    <h2>Einstellungen</h2>
+
+    <label>API-Key
+      <input id="key" type="password" placeholder="...">
+         <a href="https://admin.mistral.ai/organization/api-keys/" target="_blank" >Mistral API Portal</a>       
+    </label>
+<label class="remember">
+  <input type="checkbox" id="rememberKey">
+  <span>Key speichern</span>
+</label>
+    <label>Timeout pro Bild (ms)
+      <input id="timeout" type="number" value="1500" min="0" step="500">
+    </label>
+
+    <menu>
+      <button value="cancel" class="secondary">Abbrechen</button>
+      <button id="saveSettings" value="default" class="primary">OK</button>
+    </menu>
+  </form>
+</dialog>
+
+<script type="module">
+/* ---------- Grundlegende Checks ---------- */
+if (!window.isSecureContext) {
+  alert('Die Seite muss über HTTPS oder http://localhost laufen – sonst blockiert der Dateipicker.');
+}
+if (!('showDirectoryPicker' in window)) {
+  alert('File-System-Access-API nicht verfügbar. Bitte einen aktuellen Chromium-Browser verwenden.');
+}
+
+/* ---------- Konstanten & Utils ---------- */
+const allowedExt = ['.jpg','.jpeg','.png','.webp'];
+let dirHandle = null, fileHandle = null;
+
+const log = msg => {
+  const el = document.getElementById('log');
+  el.textContent += msg + '\n';
+  el.scrollTop = el.scrollHeight;
+};
+
+const fileToDataURL = file => new Promise((res,rej)=>{
+  const r = new FileReader();
+  r.onload = () => res(r.result);
+  r.onerror = rej;
+  r.readAsDataURL(file);
+});
+
+/* ---------- Einstellungen laden ---------- */
+const keyField     = document.getElementById('key');
+const timeoutField = document.getElementById('timeout');
+const rememberBox  = document.getElementById('rememberKey');
+
+/* 1) Dauerhafte Werte */
+const storedKey     = localStorage.getItem('mistralKey');
+const storedTimeout = localStorage.getItem('mistralTimeout');
+
+/* 2) Sitzungs-Fallback */
+const sessionKey = sessionStorage.getItem('mistralKey');
+
+keyField.value     = storedKey ?? sessionKey ?? '';
+rememberBox.checked = !!storedKey;
+timeoutField.value = storedTimeout ?? timeoutField.value;
+
+/* ---------- Modal öffnen/schließen ---------- */
+document.getElementById('settingsBtn').onclick = () => settingsDialog.showModal();
+
+settingsDialog.addEventListener('close', () => {
+  const key      = keyField.value.trim();
+  const timeout  = timeoutField.value.trim();
+  const remember = rememberBox.checked;
+
+  /* Key speichern */
+  if (remember) {
+    localStorage.setItem('mistralKey', key);
+    sessionStorage.removeItem('mistralKey');
+  } else {
+    sessionStorage.setItem('mistralKey', key);
+    localStorage.removeItem('mistralKey');
+  }
+
+  /* Timeout immer persistent */
+  localStorage.setItem('mistralTimeout', timeout);
+});
+
+/* ---------- Picker-Buttons ---------- */
+document.getElementById('pickDir').onclick = async () => {
+  try {
+    dirHandle = await window.showDirectoryPicker({mode:'read'});
+    document.getElementById('dirName').textContent = dirHandle.name;
+  } catch {}
+};
+
+document.getElementById('pickFile').onclick = async () => {
+  try {
+    fileHandle = await window.showSaveFilePicker({
+      suggestedName:'bildbeschreibungen.txt',
+      types:[{description:'Text',accept:{'text/plain':['.txt']}}]
+    });
+    document.getElementById('fileName').textContent = fileHandle.name;
+  } catch {}
+};
+
+/* ---------- Hauptlogik ---------- */
+document.getElementById('run').onclick = async () => {
+  const key     = keyField.value.trim();
+  const prompt  = document.getElementById('prompt').value.trim();
+  const timeout = +timeoutField.value || 0;
+
+  if (!key || !dirHandle || !fileHandle || !prompt) {
+    alert('Bitte Key, Ordner, Datei und Prompt angeben (Key/Timeout im Zahnrad-Menü).');
+    return;
+  }
+
+  const API_URL = 'https://api.mistral.ai/v1/chat/completions';
+  const MODEL   = 'pixtral-12b-latest';
+  let output    = '';
+
+  log('Start …');
+
+
+  for await (const [name, entry] of dirHandle.entries()) {
+    if (entry.kind !== 'file') continue;
+    const ext = name.slice(name.lastIndexOf('.')).toLowerCase();
+    if (!allowedExt.includes(ext)) continue;
+    try {
+      const file    = await entry.getFile();
+      const dataURL = await fileToDataURL(file);
+
+      const body = {
+        model: MODEL,
+        messages:[{
+          role:'user',
+          content:[
+            {type:'text',text:prompt},
+            {type:'image_url',image_url:dataURL}
+          ]
+        }]
+      };
+
+      const res = await fetch(API_URL,{
+        method:'POST',
+        headers:{
+          Authorization:`Bearer ${key}`,
+          'Content-Type':'application/json'
+        },
+        body:JSON.stringify(body)
+      });
+
+      if (!res.ok) {
+        const msg = res.status===401 ? '401 (ungültiger/abgelaufener Key)' : `${res.status} ${res.statusText}`;
+        throw new Error(msg);
+      }
+
+      const data = await res.json();
+      const caption = data.choices?.[0]?.message?.content?.trim() ?? '';
+      output += `${name}: ${caption}\n`;
+      log('✓ '+name);
+
+    } catch (err) {
+      log('⚠︎ '+name+': '+err.message);
+    }
+
+    if (timeout>0) await new Promise(r=>setTimeout(r, timeout));
+  }
+
+  /* ---------- Datei schreiben ---------- */
+  try {
+    if (await fileHandle.queryPermission({mode:'readwrite'}) !== 'granted') {
+      await fileHandle.requestPermission({mode:'readwrite'});
+    }
+    const writable = await fileHandle.createWritable();
+    await writable.write(output);
+    await writable.close();
+    log('Fertig – Datei gespeichert.');
+  } catch (err) {
+    log('❌ Schreiben fehlgeschlagen: '+err.message);
+  }
+};
+</script>
+</body>
+</html>
